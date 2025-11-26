@@ -1,0 +1,139 @@
+name: PachangApp Despliegue Secuencial en AWS S3
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: 1. Instalar y Probar
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22.x', cache: 'npm' }
+      - run: npm ci
+      - run: npm test
+
+  build:
+    name: 2. Construir Artefactos
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22.x', cache: 'npm' }
+      - run: npm ci
+      - run: npm run docs
+      - uses: actions/upload-artifact@v4
+        with: { name: static-site, path: src/ }
+      - uses: actions/upload-artifact@v4
+        with: { name: documentation, path: docs/ }
+      - uses: actions/upload-artifact@v4
+        with: { name: images-folder, path: images/ }
+
+  deploy:
+    name: 3. Desplegar en AWS S3
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v5.1.0
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      - uses: actions/download-artifact@v4
+        with: { name: static-site, path: ./sitio-web }
+      - uses: actions/download-artifact@v4
+        with: { name: documentation, path: ./sitio-docs }
+      - uses: actions/download-artifact@v4
+        with: { name: images-folder, path: ./sitio-imagenes }
+      - run: aws s3 sync ./sitio-web/ s3://${{ secrets.S3_BUCKET_NAME }} --delete
+      - run: aws s3 sync ./sitio-docs/ s3://${{ secrets.S3_BUCKET_NAME }}/docs --delete
+      - run: aws s3 sync ./sitio-imagenes/ s3://${{ secrets.S3_BUCKET_NAME }}/images --delete
+3. AWS EC2: Configuración y Despliegue
+A. Configuración Manual del Servidor (Infraestructura)
+Lanzar Instancia:
+
+AWS Console > EC2 > Launch Instance.
+Nombre: PachangApp-Server.
+OS: Ubuntu Server 22.04 LTS.
+Instance Type: t2.micro.
+Key pair: Crea una nueva (.pem) y guárdala.
+Configurar Security Group (Firewall):
+
+En "Network settings", permite tráfico:
+SSH (22) desde "Anywhere" (0.0.0.0/0).
+HTTP (80) desde "Anywhere".
+HTTPS (443) desde "Anywhere".
+Preparar el Servidor (SSH):
+Conéctate desde tu terminal:
+
+chmod 400 tu-clave.pem
+ssh -i "tu-clave.pem" ubuntu@TU_IP_PUBLICA
+Dentro de la EC2, instala Nginx y ajusta permisos:
+
+sudo apt update
+sudo apt install nginx -y
+# Dar permisos al usuario ubuntu para escribir en la carpeta web
+sudo chown -R ubuntu:ubuntu /var/www/html
+B. Despliegue Automático (GitHub Actions)
+Secrets en GitHub:
+
+EC2_HOST (IP Pública), EC2_USER (ubuntu), EC2_KEY (contenido del .pem).
+Workflow (.github/workflows/deploy-ec2.yml):
+
+name: PachangApp Despliegue en EC2
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: 1. Instalar y Probar
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22.x', cache: 'npm' }
+      - run: npm ci
+      - run: npm test
+
+  build:
+    name: 2. Construir Artefactos
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22.x', cache: 'npm' }
+      - run: npm ci
+      - run: npm run docs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: full-site
+          path: |
+            src/
+            docs/
+            images/
+
+  deploy:
+    name: 3. Desplegar en EC2
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: full-site, path: ./dist }
+      - name: Configurar SSH y Desplegar
+        run: |
+          mkdir -p ~/.ssh/
+          echo "${{ secrets.EC2_KEY }}" > ~/.ssh/deploy_key.pem
+          chmod 600 ~/.ssh/deploy_key.pem
+          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+          
+          # Limpiar y Copiar
+          ssh -i ~/.ssh/deploy_key.pem ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "rm -rf /var/www/html/*"
+          scp -i ~/.ssh/deploy_key.pem -r ./dist/src/* ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/var/www/html/
+          scp -i ~/.ssh/deploy_key.pem -r ./dist/docs ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/var/www/html/
+          scp -i ~/.ssh/deploy_key.pem -r ./dist/images ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/var/www/html/
