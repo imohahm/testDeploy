@@ -54,11 +54,12 @@ jobs:
           name: static-site
           path: src/ 
 
-      - name: Subir artefacto de la documentación
-        uses: actions/upload-artifact@v4
-        with:
-          name: documentation
-          path: docs/
+      - name: Generar documentación con JSDoc
+        run: |
+          echo "Generando documentación con JSDoc..."
+          mkdir -p docs
+          npx jsdoc -c jsdoc.json || true
+          echo "Documentación generada en /docs"
           
       - name: Subir artefacto de las imágenes 
         uses: actions/upload-artifact@v4
